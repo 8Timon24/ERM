@@ -1,0 +1,72 @@
+---
+format:
+  pdf:
+    geometry: margin=1.5cm
+    fontsize: 10pt
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+## Homework 01 — Timon Bubnič (63220035)
+```{r} 
+library(tidyverse)
+#set.seed(42)
+shots <- read_delim(here::here("data", "basketball.csv"), 
+                    delim = ";", 
+                    show_col_types = FALSE) |> 
+                    rename(shot_type = ShotType,
+                            movement = Movement,
+                            distance = Distance,
+                            angle = Angle)
+
+grouped <- shots |> group_by(shot_type, movement) |> 
+  summarise(
+    total_shots = n(),
+    mean_distance = mean(distance),
+    mean_angle = mean(angle),
+    se_angle =sd(angle)/sqrt(n()),
+    .groups = "drop"
+  ) |> arrange(desc(total_shots))
+
+knitr::kable(
+  grouped,
+  digits = 3,
+  col.names = c("Shot type", "Movement", "Total shots", 
+                "Mean distance (m)", "Mean angle (°)", 
+                "SE angle (°)")
+)
+```
+
+## Standard error
+
+The sample standard error of the mean angle in each of the grouped shot types and movements is:
+
+$$
+\text{SE}(\bar{x}) = \frac{s}{\sqrt{n}} = \sqrt{\frac{\sum_{i=1}^n (x_i - \bar{x})^2}{n(n-1)}}
+$$
+where $x_i$ are the individual angles, $\bar{x}$ their mean, $s$ the sample
+standard deviation and $n$ the number of shots in the group.
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3.3
+#| out-width: 100%
+p <- ggplot(shots, aes(x = distance, y = angle, 
+                       colour = shot_type, 
+                       fill = shot_type)) +
+  geom_point(alpha = 0.4, size = 1.5) +
+  geom_smooth(method = "lm", formula = y ~ x, alpha = 0.2) +
+  facet_wrap(~ shot_type) +
+  labs(
+    title = "Relationship between distance and angle",
+    x = "Distance (m)",
+    y = "Angle (°)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+p
+```
+
+In the figure we can see that across all shot types the angle is scattered over almost the whole range from 0° to 90° at any distance, and the regression lines are nearly flat for above head, layup and other, while for dunks and tip-ins the relationship looks negative (but there are far fewer points, so the confidence intervals are wider) and for hook shots it looks positive. Above head and other shots were taken from 0 to 10 m, while hook shots and layups were mostly concentrated near 0–2.5 m with a few shots from as far as 7.5 m. Tip-ins and dunks were both taken from within about 2.5 m of the basket.
