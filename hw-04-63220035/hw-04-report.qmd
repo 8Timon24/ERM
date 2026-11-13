@@ -1,0 +1,88 @@
+---
+format:
+  pdf:
+    papersize: a4
+    fontsize: 10pt
+    geometry:
+      - margin=1.2cm
+    fig-dpi: 300
+    fig-pos: "H"
+    colorlinks: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+**Homework 4 - 63220035** | Timon Bubnič
+
+```{r}
+#| include: false
+library(boot)
+
+data(mammals, package = "MASS")
+model0 <- lm(brain ~ body, data = mammals)
+
+removed <- c("African elephant", "Asian elephant", "Human", "Cow")
+dat4 <- mammals[!(rownames(mammals) %in% removed), ]
+model_final <- lm(brain ~ body, data = dat4)
+```
+
+**Influential points.** A point in the residuals-leverage plot is influential if it has both high leverage (extreme body) and a large standardized residual, so it lies near the Cook's distance contour and pulls the fitted line towards itself. In the initial model, African elephant (leverage about 0.87) and Asian elephant (standardized residual about 6.5, beyond the Cook's distance contour) are clearly influential. After removing them, Human stands out with a standardized residual of about 6.8, and after removing Human, Cow combines high leverage (about 0.22) with a large residual (about -2.7). Because removing one point shifts the fit and changes the influence of the others, we removed them one at a time, refitting after each step.
+
+```{r}
+#| fig-width: 5
+#| fig-height: 2.2
+par(mar = c(4, 4, 2, 1))
+plot(model0, which = 5)
+```
+
+**Diagnostics of the refitted model.** Linearity is potentially violated: the residuals vs. fitted plot shows a curved trend rather than a flat line. Normality is violated: the QQ plot deviates strongly from the diagonal, with a heavy right tail (e.g. Chimpanzee). Homoskedasticity is potentially violated: residual spread increases with body. Independence shows no evidence of autocorrelation in the ACF, but since the rows are in alphabetical order this check has little power.
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3.6
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+plot(model_final, which = 1)
+plot(model_final, which = 2)
+plot(dat4$body, residuals(model_final), xlab = "body", ylab = "residuals")
+abline(h = 0, lty = 2)
+acf(residuals(model_final), main = "ACF of residuals")
+```
+
+```{r}
+#| include: false
+model_summary <- summary(model_final)$coefficients
+model_ci95 <- confint(model_final)
+
+boot_lm <- function(data, indices) {
+  boot_data <- data[indices, ]
+  fit <- lm(brain ~ body, data = boot_data)
+  c(coef(fit), summary(fit)$sigma)
+}
+
+set.seed(1)
+boot_results <- boot(data = dat4, statistic = boot_lm, R = 1000)
+boot_se <- apply(boot_results$t, 2, sd)
+boot_ci95 <- apply(boot_results$t, 2, quantile, probs = c(0.025, 0.975))
+
+comparison <- data.frame(
+  Parameter = c("Intercept", "body", "sigma"),
+  Estimate = c(coef(model_final), summary(model_final)$sigma),
+  Bootstrap_SE = boot_se,
+  OLS_SE = c(model_summary[, "Std. Error"], NA),
+  Bootstrap_CI_Lower = boot_ci95[1, ],
+  Bootstrap_CI_Upper = boot_ci95[2, ],
+  OLS_CI_Lower = c(model_ci95[, 1], NA),
+  OLS_CI_Upper = c(model_ci95[, 2], NA)
+)
+```
+
+**Estimates.**
+
+```{r}
+print(round(comparison[, c("Estimate", "Bootstrap_SE", "OLS_SE",
+                           "Bootstrap_CI_Lower", "Bootstrap_CI_Upper")], 3))
+```
+
+The intercept estimate is 34.6 g (95% bootstrap CI [18.1, 52.1]) and the body coefficient is 1.34 g per kg (95% bootstrap CI [1.22, 1.91]). Because normality and homoskedasticity are doubtful, the bootstrap intervals are reported as primary; the OLS standard error for the slope (0.089) is about half the bootstrap one (0.172) and is likely too optimistic.

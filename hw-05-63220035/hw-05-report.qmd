@@ -1,0 +1,129 @@
+---
+format:
+  pdf:
+    papersize: a4
+    fontsize: 10pt
+    geometry:
+      - margin=1.2cm
+    fig-dpi: 300
+    fig-pos: "H"
+    colorlinks: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+**Homework 5 - 63220035** | Timon Bubnič
+
+```{r}
+#| include: false
+library(ggplot2)
+library(dplyr)
+library(here)
+
+data(mpg, package = "ggplot2")
+mpg_clean <- mpg |>
+  filter(!is.na(hwy), !is.na(displ), !is.na(drv)) |>
+  mutate(displ_c = displ - mean(displ))
+
+mean_displ <- mean(mpg_clean$displ)
+mod_A <- lm(hwy ~ displ_c + drv, data = mpg_clean)
+mod_B <- lm(hwy ~ displ_c * drv, data = mpg_clean)
+mod_B_raw <- lm(hwy ~ displ * drv, data = mpg_clean)
+
+b <- coef(mod_B)
+cf <- summary(mod_B)$coefficients
+ci <- confint(mod_B)
+slope_f <- b["displ_c"] + b["displ_c:drvf"]
+slope_r <- b["displ_c"] + b["displ_c:drvr"]
+n_r <- sum(mpg_clean$drv == "r")
+
+coef_tab <- data.frame(
+  Estimate = cf[, "Estimate"], SE = cf[, "Std. Error"],
+  Lower95 = ci[, 1], Upper95 = ci[, 2], p = cf[, "Pr(>|t|)"]
+)
+
+# in-sample
+insample <- data.frame(
+  Model = c("A (parallel)", "B (interaction)"),
+  k = c(length(coef(mod_A)), length(coef(mod_B))),
+  R2 = c(summary(mod_A)$r.squared, summary(mod_B)$r.squared),
+  Adj_R2 = c(summary(mod_A)$adj.r.squared, summary(mod_B)$adj.r.squared),
+  AIC = c(AIC(mod_A), AIC(mod_B))
+)
+d_aic <- AIC(mod_A) - AIC(mod_B)
+p_F <- anova(mod_A, mod_B)[2, "Pr(>F)"]
+
+# LOOCV (closed form for lm; checked against explicit loop)
+loo_se <- function(m) (residuals(m) / (1 - hatvalues(m)))^2
+loo_loop <- function(m) {
+  d <- model.frame(m); f <- formula(m); y <- model.response(d)
+  sapply(seq_len(nrow(d)), function(i) (y[i] - predict(lm(f, data = d[-i, ]), d[i, ]))^2)
+}
+se_A <- loo_se(mod_A); se_B <- loo_se(mod_B)
+stopifnot(max(abs(se_A - loo_loop(mod_A))) < 1e-8,
+          max(abs(se_B - loo_loop(mod_B))) < 1e-8)
+
+d <- se_A - se_B   # > 0: B predicts better
+n <- length(d); d_bar <- mean(d); se_d <- sd(d) / sqrt(n)
+ci_d <- d_bar + c(-1, 1) * 1.96 * se_d
+loo_tab <- data.frame(
+  Model = c("A (parallel)", "B (interaction)", "Difference A - B"),
+  MSE = c(mean(se_A), mean(se_B), d_bar),
+  SE = c(NA, NA, se_d),
+  Lower95 = c(NA, NA, ci_d[1]), Upper95 = c(NA, NA, ci_d[2])
+)
+
+# fitted lines over each drivetrain's observed range
+rng <- mpg_clean |> group_by(drv) |> summarise(lo = min(displ_c), hi = max(displ_c))
+grid <- expand.grid(
+  displ_c = seq(min(mpg_clean$displ_c), max(mpg_clean$displ_c), length.out = 100),
+  drv = sort(unique(mpg_clean$drv))
+) |>
+  left_join(rng, by = "drv") |>
+  filter(displ_c >= lo, displ_c <= hi)
+grid_all <- bind_rows(
+  mutate(grid, Model = "Model A: parallel slopes", fit = predict(mod_A, grid)),
+  mutate(grid, Model = "Model B: varying slopes", fit = predict(mod_B, grid))
+)
+```
+
+**Model B coefficients.** Reference drivetrain is `4` (four-wheel drive); `displ_c` is centered at the mean (`r round(mean_displ, 2)` L).
+
+```{r}
+print(round(coef_tab, 3))
+```
+
+The intercept (`r round(b["(Intercept)"], 2)`) is the expected mpg of a 4wd car with average displacement, and `displ_c` (`r round(b["displ_c"], 2)`) is the 4wd slope, about `r round(-b["displ_c"], 1)` mpg lost per litre. `drvf` (`r round(b["drvf"], 2)`) and `drvr` (`r round(b["drvr"], 2)`) are differences from 4wd at average displacement: front-wheel drive is clearly more economical (95% CI [`r round(ci["drvf", 1], 2)`, `r round(ci["drvf", 2], 2)`]), rear-wheel drive is not clearly different. The interactions are slope changes relative to 4wd: the front slope is `r round(slope_f, 2)` (p = `r round(cf["displ_c:drvf", 4], 2)`), the rear slope `r round(slope_r, 2)` is flatter (p = `r round(cf["displ_c:drvr", 4], 3)`), but rests on only `r n_r` cars.
+
+**Why centering.** Uncentered, the intercept and drivetrain main effects refer to `displ = 0`, a zero-litre engine far outside the data (`r min(mpg_clean$displ)`-`r max(mpg_clean$displ)` L). There `drvr` is `r round(coef(mod_B_raw)["drvr"], 2)`, versus `r round(b["drvr"], 2)` after centering: the sign flips only because the slopes differ and the comparison sits at an impossible engine. Centering compares drivetrains at a typical engine and leaves slopes, fits, $R^2$, AIC and CV unchanged.
+
+```{r}
+#| fig-width: 7
+#| fig-height: 2.3
+ggplot(mpg_clean, aes(displ_c, hwy, colour = drv)) +
+  geom_point(alpha = 0.6, size = 1) +
+  geom_line(data = grid_all, aes(y = fit), linewidth = 0.8) +
+  facet_wrap(~Model) +
+  labs(x = "Centered displacement (L)", y = "Highway mpg", colour = "Drive") +
+  theme_minimal(base_size = 9)
+```
+
+**In-sample.**
+
+```{r}
+print(insample, digits = 4, row.names = FALSE)
+```
+
+B has higher $R^2$ and adjusted $R^2$ and lower AIC (by `r round(d_aic, 1)`); the F-test for the interactions gives p = `r round(p_F, 3)`. In-sample, B is mildly favoured.
+
+**LOOCV.** The leave-one-out error is $e_i/(1-h_{ii})$ (checked against an explicit loop); $d_i = \mathrm{SE}^A_i - \mathrm{SE}^B_i$ (positive: B better).
+
+```{r}
+print(mutate(loo_tab, across(where(is.numeric), ~ round(.x, 3))), row.names = FALSE)
+```
+
+The mean difference is `r round(d_bar, 3)` (SE `r round(se_d, 3)`), 95% CI [`r round(ci_d[1], 3)`, `r round(ci_d[2], 3)`], which contains zero: neither model is demonstrably better out of sample. B wins on only `r round(100 * mean(d > 0), 1)`% of cars, and the gap comes from a few Corvettes.
+
+**Does the interaction earn its keep?** Barely. B is mildly favoured in-sample but brings no demonstrable out-of-sample gain, and its extra slope rests on `r n_r` rear-wheel-drive cars. The simpler Model A is the better default.
